@@ -7,10 +7,10 @@ from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import CommandStart
 
 # ================= KONFIG =================
-BOT_TOKEN = "8317197195:AAF1ALwZx3XQGnnEePrn1aJtGeI_CP_Fu3I"
-CHANNEL_USERNAME = "@emsamasamaenak"
-ADMIN_ID = 5609976748
-BOT_USERNAME = "emsamasamaenak_bot"
+BOT_TOKEN = 
+CHANNEL_USERNAME =
+ADMIN_ID = 
+BOT_USERNAME = 
 # ================= PATH DB (PASTI ADA) =================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_NAME = os.path.join(BASE_DIR, "media.db")
@@ -159,3 +159,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
