@@ -15,7 +15,7 @@ ADMIN_ID = int(os.getenv("ADMIN_ID")) if os.getenv("ADMIN_ID") else 0
 BOT_USERNAME = os.getenv("BOT_USERNAME")
 
 # DAFTAR KATA SING DIPISUHI (FILTER)
-KATA_KOTOR = ["open bo", "promosi", "jual chip", "slot gacor", "pukimak"]
+KATA_KOTOR = ["bio", "promosi", "jual chip", "slot gacor", "b1o", "vcs"]
 
 bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
@@ -37,8 +37,7 @@ async def check_membership(user_id: int):
         try:
             m = await bot.get_chat_member(chat, user_id)
             results.append(m.status in ("member", "administrator", "creator"))
-        except Exception as e:
-            print(f"Error check {chat}: {e}")
+        except Exception:
             results.append(False)
     return results # [is_ch1, is_ch2, is_gr]
 
@@ -54,18 +53,19 @@ def join_keyboard(code: str, status: list):
     buttons.append([InlineKeyboardButton(text="🔄 UPDATE / COBA LAGI", callback_data=f"retry:{code}")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-# ================= GRUP HANDLERS (WELCOME, GOODBYE, FILTER) =================
+# ================= GRUP HANDLERS (WELCOME, GOODBYE, FILTER DENGAN TAG) =================
 
 @dp.message(F.new_chat_members)
 async def welcome_handler(message: Message):
-    print(f"User join neng: {message.chat.title}")
     for user in message.new_chat_members:
-        await message.answer(f"Selamat datang tol {user.full_name}! Ramein grup ini!")
+        mention = f"[{user.full_name}](tg://user?id={user.id})"
+        await message.answer(f"Selamat datang mwah {mention}! Ramein grup ini!", parse_mode="Markdown")
 
 @dp.message(F.left_chat_member)
 async def goodbye_handler(message: Message):
-    print(f"User metu soko: {message.chat.title}")
-    await message.answer(f"kontol si {message.left_chat_member.full_name} malah out dari grup!")
+    user = message.left_chat_member
+    mention = f"[{user.full_name}](tg://user?id={user.id})"
+    await message.answer(f"kontol ni si {mention} malah out dari grup asu!", parse_mode="Markdown")
 
 @dp.message(F.chat.type.in_({"group", "supergroup"}))
 async def filter_kata_handler(message: Message):
@@ -73,10 +73,11 @@ async def filter_kata_handler(message: Message):
     text_low = message.text.lower()
     if any(kata in text_low for kata in KATA_KOTOR):
         try:
+            mention = f"[{message.from_user.first_name}](tg://user?id={message.from_user.id})"
             await message.delete()
-            await message.answer(f"Heh {message.from_user.first_name} asui jangan nyepam disini bajingan!")
-        except Exception as e:
-            print(f"Gagal hapus/bales filter: {e}")
+            await message.answer(f"he su {mention} kontol gaboleh ngetik itu disini asu!", parse_mode="Markdown")
+        except Exception:
+            pass
 
 # ================= ADMIN & USER HANDLERS (PRIVATE ONLY) =================
 
@@ -88,7 +89,7 @@ async def start_handler(message: Message):
     
     args = message.text.split(" ", 1)
     if len(args) == 1:
-        await message.answer("👋 Join dulu ya biar bisa akses konten!")
+        await message.answer("👋 Halo! Join dulu biar bisa akses konten!")
         return
     await send_media(message.chat.id, message.from_user.id, args[1])
 
@@ -97,7 +98,7 @@ async def stats_handler(message: Message):
     async with aiosqlite.connect(DB_NAME) as db:
         async with db.execute("SELECT COUNT(*) FROM users") as c1: u = await c1.fetchone()
         async with db.execute("SELECT COUNT(*) FROM media") as c2: m = await c2.fetchone()
-    await message.answer(f"📊 Stats:\nUsers: {u[0]}\nMedia: {m[0]}")
+    await message.answer(f"📊 **STATS**\n\n👥 Users: {u[0]}\n📦 Media: {m[0]}")
 
 @dp.message(Command("all"), F.from_user.id == ADMIN_ID)
 async def broadcast_handler(message: Message):
@@ -105,10 +106,12 @@ async def broadcast_handler(message: Message):
     cap = (target.caption or target.text or "").replace("/all", "").strip()
     async with aiosqlite.connect(DB_NAME) as db:
         async with db.execute("SELECT user_id FROM users") as cursor: rows = await cursor.fetchall()
+    
+    await message.answer(f"🚀 Memulai broadcast ke {len(rows)} user...")
     for row in rows:
         try:
             if target.photo: await bot.send_photo(row[0], target.photo[-1].file_id, caption=cap)
-            elif target.video: await bot.send_video(row[0], target_msg.video.file_id, caption=cap)
+            elif target.video: await bot.send_video(row[0], target.video.file_id, caption=cap)
             else: await bot.send_message(row[0], cap)
             await asyncio.sleep(0.3)
         except: continue
@@ -122,7 +125,21 @@ async def admin_upload(message: Message):
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute("INSERT OR REPLACE INTO media VALUES (?, ?, ?, ?)", (code, f_id, m_t, message.caption or ""))
         await db.commit()
-    await message.reply(f"🔗 Link: `https://t.me/{BOT_USERNAME}?start={code}`")
+    await message.reply(f"✅ Tersimpan!\n🔗 Link: `https://t.me/{BOT_USERNAME}?start={code}`")
+
+@dp.message(Command("del"), F.from_user.id == ADMIN_ID)
+async def delete_handler(message: Message):
+    code = message.text.replace("/del", "").strip()
+    if not code: return await message.reply("❌ Format: `/del [kode]`")
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("DELETE FROM media WHERE code=?", (code,))
+        await db.commit()
+    await message.reply(f"✅ Kode `{code}` wis dibusak!")
+
+@dp.message(Command("senddb"), F.from_user.id == ADMIN_ID)
+async def send_db_handler(message: Message):
+    if os.path.exists(DB_NAME):
+        await message.answer_document(FSInputFile(DB_NAME), caption="📦 Backup DB")
 
 # ================= SYSTEM =================
 
@@ -135,17 +152,19 @@ async def retry_handler(callback):
 async def send_media(chat_id: int, user_id: int, code: str):
     status = await check_membership(user_id)
     if not all(status):
-        await bot.send_message(chat_id, "🚫 harus join semua ini sayang, kalo udah klik cobalagi!", reply_markup=join_keyboard(code, status))
+        await bot.send_message(chat_id, "🚫 harus join semuanya sayang,kalo udah klik cobalagi!", reply_markup=join_keyboard(code, status))
         return
     async with aiosqlite.connect(DB_NAME) as db:
         async with db.execute("SELECT file_id, type, caption FROM media WHERE code=?", (code,)) as cursor: row = await cursor.fetchone()
     if not row: return await bot.send_message(chat_id, "❌ Link salah.")
-    if row[1] == "photo": await bot.send_photo(chat_id, row[0], caption=row[2], protect_content=True)
-    else: await bot.send_video(chat_id, row[0], caption=row[2], protect_content=True)
+    
+    f_id, m_type, cap = row
+    if m_type == "photo": await bot.send_photo(chat_id, f_id, caption=cap, protect_content=True)
+    else: await bot.send_video(chat_id, f_id, caption=cap, protect_content=True)
 
 async def main():
     await init_db()
-    print("Bot is Running...")
+    print("Bot is running...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
