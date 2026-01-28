@@ -59,9 +59,18 @@ def join_keyboard(code: str, status: list):
     buttons.append([InlineKeyboardButton(text="🔄 UPDATE / COBA LAGI", callback_data=f"retry:{code}")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-# ================= FITUR ANYAR (ADMIN & GROUP) =================
+# ================= 1. HANDLER KHUSUS ADMIN (PRIORITAS TINGGI) =================
 
-# 1. Khusus Admin: Broadcast /all
+@dp.message(F.from_user.id == ADMIN_ID, (F.photo | F.video), F.chat.type == "private")
+async def admin_upload(message: Message):
+    code = uuid.uuid4().hex[:8]
+    f_id = message.photo[-1].file_id if message.photo else message.video.file_id
+    m_t = "photo" if message.photo else "video"
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("INSERT OR REPLACE INTO media VALUES (?, ?, ?, ?)", (code, f_id, m_t, message.caption or ""))
+        await db.commit()
+    await message.reply(f"🔗 Link: `https://t.me/{BOT_USERNAME}?start={code}`", parse_mode="Markdown")
+
 @dp.message(Command("all"), F.from_user.id == ADMIN_ID)
 async def broadcast_handler(message: Message):
     args = message.text.split(maxsplit=1)
@@ -78,12 +87,11 @@ async def broadcast_handler(message: Message):
         try:
             await bot.send_message(row[0], pesan)
             count += 1
-            await asyncio.sleep(0.05) # Ben ora keno limit
+            await asyncio.sleep(0.05) 
         except Exception:
             pass
     await message.reply(f"✅ Berhasil kirim neng {count} member.")
 
-# 2. Khusus Admin: Kirim DB /senddb
 @dp.message(Command("senddb"), F.from_user.id == ADMIN_ID)
 async def send_db_handler(message: Message):
     if os.path.exists(DB_NAME):
@@ -92,10 +100,15 @@ async def send_db_handler(message: Message):
     else:
         await message.reply("DB ora ketemu!")
 
-# 3. Fitur Reply Admin (Otomatis kirim neng user)
+@dp.message(Command("stats"), F.from_user.id == ADMIN_ID)
+async def stats_handler(message: Message):
+    async with aiosqlite.connect(DB_NAME) as db:
+        async with db.execute("SELECT COUNT(*) FROM users") as c1: u = await c1.fetchone()
+        async with db.execute("SELECT COUNT(*) FROM media") as c2: m = await c2.fetchone()
+    await message.answer(f"📊 Stats:\nUsers: {u[0]}\nMedia: {m[0]}")
+
 @dp.message(F.chat.type == "private", F.from_user.id == ADMIN_ID, F.reply_to_message)
 async def reply_admin_handler(message: Message):
-    # Cek opo chat seng direply ono ID user-e
     reply_text = message.reply_to_message.text or message.reply_to_message.caption
     if reply_text and "🆔 ID:" in reply_text:
         try:
@@ -105,7 +118,52 @@ async def reply_admin_handler(message: Message):
         except Exception as e:
             await message.reply(f"❌ Gagal kirim: {e}")
 
-# 4. Fitur Grup: Welcome, Leave, & Filter Kata
+# ================= 2. HANDLER USER & FITUR UMUM =================
+
+@dp.message(CommandStart(), F.chat.type == "private")
+async def start_handler(message: Message):
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (message.from_user.id,))
+        await db.commit()
+    
+    args = message.text.split(" ", 1)
+    if len(args) == 1:
+        await message.answer("👋 aloo sayang ketik (garis miring) buat lihat daftar fitur.\nJoin dulu buat akses konten.")
+        return
+    await send_media(message.chat.id, message.from_user.id, args[1])
+
+@dp.message(Command("ask"))
+async def ask_handler(message: Message):
+    args = message.text.split(maxsplit=1)
+    if len(args) < 2:
+        return await message.reply("⚠️ Cara menggunakan: `/ask pesan` \nConto: `/ask min link mati`")
+    
+    pesan_user = args[1]
+    user_info = f"📩 **PESAN ANYAR (ASK)**\n👤 Soko: {message.from_user.full_name}\n🆔 ID: `{message.from_user.id}`"
+    
+    await bot.send_message(ADMIN_ID, f"{user_info}\n\n💬 Pesan: {pesan_user}", parse_mode="Markdown")
+    await message.reply("✅ Pesanmu udah dikirim ke admin, silahkan tunggu balasan.")
+
+@dp.message(Command("donasi"))
+async def donasi_start(message: Message):
+    await message.answer("🙏 maaciw donasinya.\n\n**Silahkan kirim video/foto serta caption.**\nOtomatis akan diteruskan ke Admin.")
+
+@dp.message(F.chat.type == "private", (F.photo | F.video | F.document))
+async def handle_donasi_upload(message: Message):
+    if message.from_user.id == ADMIN_ID:
+        return
+
+    user_info = f"🎁 **DONASI/KONTEN ANYAR**\n👤 Soko: {message.from_user.full_name}\n🆔 ID: `{message.from_user.id}`"
+    
+    try:
+        await bot.send_message(ADMIN_ID, user_info, parse_mode="Markdown")
+        await bot.forward_message(ADMIN_ID, message.chat.id, message.message_id)
+        await message.reply("✅ File udah dikirim ke admin thanks!.")
+    except Exception as e:
+        print(f"Error forward donasi: {e}")
+
+# ================= 3. HANDLER GRUP =================
+
 @dp.message(F.chat.type.in_({"group", "supergroup"}), F.new_chat_members)
 async def welcome_grup(message: Message):
     for member in message.new_chat_members:
@@ -124,73 +182,6 @@ async def filter_kata_grup(message: Message):
                 await message.answer(f"GABOLEH NGETIK ITU DISINI! {message.from_user.mention_html()} SEKALI LAGI GW MUTE ANJING!", parse_mode="HTML")
             except TelegramBadRequest:
                 pass
-
-# ================= NEW FEATURES (/ASK & /DONASI) =================
-
-@dp.message(Command("ask"))
-async def ask_handler(message: Message):
-    args = message.text.split(maxsplit=1)
-    if len(args) < 2:
-        return await message.reply("⚠️ Cara menggunakan: `/ask pesan` \nConto: `/ask min link mati`")
-    
-    pesan_user = args[1]
-    user_info = f"📩 **PESAN ANYAR (ASK)**\n👤 Soko: {message.from_user.full_name}\n🆔 ID: `{message.from_user.id}`"
-    
-    await bot.send_message(ADMIN_ID, f"{user_info}\n\n💬 Pesan: {pesan_user}")
-    await message.reply("✅ Pesanmu udah dikirim ke admin, silahkan tunggu balasan.")
-
-@dp.message(Command("donasi"))
-async def donasi_start(message: Message):
-    await message.answer("🙏 maaciw donasinya.\n\n**Silahkan kirim video/foto serta caption.**\nOtomatis akan diteruskan ke Admin.")
-
-@dp.message(F.chat.type == "private", (F.photo | F.video | F.document))
-async def handle_donasi_upload(message: Message):
-    # Yen sing ngirim admin dewe, cuekke wae ben ora dobel
-    if message.from_user.id == ADMIN_ID:
-        return
-
-    user_info = f"🎁 **DONASI/KONTEN ANYAR**\n👤 Soko: {message.from_user.full_name}\n🆔 ID: `{message.from_user.id}`"
-    
-    try:
-        # Kirim info user neng admin
-        await bot.send_message(ADMIN_ID, user_info)
-        # Forward file-e neng admin
-        await bot.forward_message(ADMIN_ID, message.chat.id, message.message_id)
-        # Balas neng user
-        await message.reply("✅ File udah dikirim ke admin thanks!.")
-    except Exception as e:
-        print(f"Error forward donasi: {e}")
-
-# ================= EXISTING HANDLERS =================
-
-@dp.message(CommandStart(), F.chat.type == "private")
-async def start_handler(message: Message):
-    async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (message.from_user.id,))
-        await db.commit()
-    
-    args = message.text.split(" ", 1)
-    if len(args) == 1:
-        await message.answer("👋 aloo sayang ketik (garis miring) buat lihat daftar fitur.\nJoin dulu buat akses konten.")
-        return
-    await send_media(message.chat.id, message.from_user.id, args[1])
-
-@dp.message(Command("stats"), F.from_user.id == ADMIN_ID)
-async def stats_handler(message: Message):
-    async with aiosqlite.connect(DB_NAME) as db:
-        async with db.execute("SELECT COUNT(*) FROM users") as c1: u = await c1.fetchone()
-        async with db.execute("SELECT COUNT(*) FROM media") as c2: m = await c2.fetchone()
-    await message.answer(f"📊 Stats:\nUsers: {u[0]}\nMedia: {m[0]}")
-
-@dp.message(F.from_user.id == ADMIN_ID, (F.photo | F.video), F.chat.type == "private")
-async def admin_upload(message: Message):
-    code = uuid.uuid4().hex[:8]
-    f_id = message.photo[-1].file_id if message.photo else message.video.file_id
-    m_t = "photo" if message.photo else "video"
-    async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute("INSERT OR REPLACE INTO media VALUES (?, ?, ?, ?)", (code, f_id, m_t, message.caption or ""))
-        await db.commit()
-    await message.reply(f"🔗 Link: `https://t.me/{BOT_USERNAME}?start={code}`")
 
 # ================= SYSTEM & POLLING =================
 
@@ -214,5 +205,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
-
