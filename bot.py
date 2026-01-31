@@ -14,8 +14,10 @@ CH2_USERNAME = os.getenv("CH2_USERNAME")
 GROUP_USERNAME = os.getenv("GROUP_USERNAME")
 ADMIN_ID = int(os.getenv("ADMIN_ID")) if os.getenv("ADMIN_ID") else 0
 BOT_USERNAME = os.getenv("BOT_USERNAME")
+# Masukkan Username (tanpa @) di Railway pada variabel EXEMPT_USERNAME
+EXEMPT_USERNAME = os.getenv("EXEMPT_USERNAME")
 
-KATA_KOTOR = ["open bo", "promosi", "bio", "slot gacor", "vcs"]
+KATA_KOTOR = ["open bo", "promosi", "bio", "byoh", "vcs"]
 
 bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
@@ -118,6 +120,13 @@ async def reply_admin_handler(message: Message):
 
 @dp.message(F.chat.type.in_({"group", "supergroup"}), F.text)
 async def filter_kata_grup(message: Message):
+    # Ambil username pengirim tanpa simbol @
+    current_username = message.from_user.username
+    
+    # Cek apakah user adalah admin atau username-nya dikecualikan
+    if message.from_user.id == ADMIN_ID or (current_username and current_username.lower() == EXEMPT_USERNAME.lower()):
+        return
+        
     if any(kata in message.text.lower() for kata in KATA_KOTOR):
         try:
             await message.delete()
