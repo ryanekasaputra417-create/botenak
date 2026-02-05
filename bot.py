@@ -9,6 +9,7 @@ from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.client.default import DefaultBotProperties
 
 # ================== CONFIG ==================
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
@@ -183,5 +184,6 @@ async def main():
 
 if __name__ == '__main__':
     asyncio.run(main())
+
 
 
