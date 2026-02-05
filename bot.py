@@ -40,11 +40,21 @@ dp = Dispatcher()
 conn = sqlite3.connect("media.db", check_same_thread=False)
 cur = conn.cursor()
 
-cur.executescript("""
+cur.execute("""
+DROP TABLE IF EXISTS users
+""")
+
+cur.execute("""
 CREATE TABLE IF NOT EXISTS users (
-  user_id INTEGER PRIMARY KEY,
-  username TEXT,
-  first_start TEXT
+    user_id INTEGER PRIMARY KEY,
+    username TEXT,
+    first_name TEXT,
+    joined_at TEXT
+)
+""")
+
+conn.commit()
+
 );
 
 CREATE TABLE IF NOT EXISTS media (
@@ -396,3 +406,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
