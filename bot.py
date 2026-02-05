@@ -1,15 +1,3 @@
-======================================================
-
-TELEGRAM BOT FULL FITUR – RAILWAY READY
-
-CONFIG DI SERVER: BOT_TOKEN & ADMIN_ID SAJA
-
-SEMUA LAIN DISET VIA PANEL ADMIN DALAM BOT
-
-aiogram v3 | SQLite | NO HARDCODE CHANNEL
-
-======================================================
-
 import asyncio, logging, sqlite3, uuid from datetime import datetime, timedelta from aiogram import Bot, Dispatcher, F from aiogram.types import * from aiogram.filters import CommandStart, Command from aiogram.enums import ChatMemberStatus, ChatType from aiogram.fsm.context import FSMContext from aiogram.fsm.state import StatesGroup, State
 
 ================= RAILWAY ENV =================
@@ -106,3 +94,4 @@ class Donate(StatesGroup): media=State()
 async def main(): await dp.start_polling(bot)
 
 if name=='main': asyncio.run(main())
+
