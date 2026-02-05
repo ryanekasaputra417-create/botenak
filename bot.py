@@ -1,7 +1,7 @@
 import asyncio, os, uuid, aiosqlite
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -61,6 +61,17 @@ async def start(m: Message):
         kb.append([InlineKeyboardButton(text="⚙️ Panel Admin", callback_data="admin")])
     await m.answer("👋 Selamat datang", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
 
+# ================= MEMBER BUTTON =================
+@dp.callback_query(F.data=="ask")
+async def ask_btn(cb: CallbackQuery):
+    await cb.message.answer("💬 Kirim pesan kamu, admin akan menerima")
+    await cb.answer()
+
+@dp.callback_query(F.data=="donasi")
+async def donasi_btn(cb: CallbackQuery):
+    await cb.message.answer("🎁 Kirim media / pesan donasi kamu")
+    await cb.answer()
+
 # ================= MEMBER MSG =================
 @dp.message(F.chat.type=="private", F.from_user.id != ADMIN_ID)
 async def member_msg(m: Message):
@@ -97,39 +108,16 @@ async def set_ch(cb: CallbackQuery, state:FSMContext):
 @dp.message(SetChannel.ch, F.from_user.id==ADMIN_ID)
 async def save_ch(m: Message, state:FSMContext):
     await set_setting("post_channel", m.text.strip())
-    await m.answer("✅ Channel berhasil disimpan")
+    await m.answer("✅ Channel disimpan")
     await state.clear()
 
-# ================= FSUB =================
-@dp.callback_query(F.data=="add_fc")
-async def add_fc(cb: CallbackQuery, state:FSMContext):
-    await cb.message.edit_text("➕ Kirim link channel (wajib join)")
-    await state.set_state(FSubCheck.link)
-
-@dp.message(FSubCheck.link, F.from_user.id==ADMIN_ID)
-async def save_fc(m: Message, state:FSMContext):
-    async with aiosqlite.connect(DB) as db:
-        await db.execute("INSERT OR IGNORE INTO fsub_check VALUES (?)",(m.text,))
-        await db.commit()
-    await m.answer("✅ FSub Check ditambahkan")
-    await state.clear()
-
-@dp.callback_query(F.data=="add_fl")
-async def add_fl(cb: CallbackQuery, state:FSMContext):
-    await cb.message.edit_text("➕ Kirim link (tombol join saja)")
-    await state.set_state(FSubList.link)
-
-@dp.message(FSubList.link, F.from_user.id==ADMIN_ID)
-async def save_fl(m: Message, state:FSMContext):
-    async with aiosqlite.connect(DB) as db:
-        await db.execute("INSERT OR IGNORE INTO fsub_list VALUES (?)",(m.text,))
-        await db.commit()
-    await m.answer("✅ FSub List ditambahkan")
-    await state.clear()
-
-# ================= AUTO POST =================
-@dp.message(F.from_user.id==ADMIN_ID, (F.photo | F.video))
-async def admin_media(m: Message, state:FSMContext):
+# ================= AUTO POST (FIX FSM) =================
+@dp.message(
+    F.from_user.id==ADMIN_ID,
+    (F.photo | F.video),
+    StateFilter(None)
+)
+async def admin_media_start(m: Message, state:FSMContext):
     await state.update_data(
         file_id=m.photo[-1].file_id if m.photo else m.video.file_id,
         type="photo" if m.photo else "video"
