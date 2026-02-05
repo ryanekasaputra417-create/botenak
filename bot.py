@@ -1,293 +1,192 @@
-# =============================
-# TELEGRAM BOT – FINAL CLEAN VERSION (FSM FIX)
-# Aiogram 3.7+
-# Semua fitur user request, StateFilter fix
-# =============================
-
-import os
-import asyncio
-import logging
-import sqlite3
-import uuid
+import os, asyncio, logging, sqlite3, random, string
 from datetime import datetime, timedelta
-
 from aiogram import Bot, Dispatcher, F
-from aiogram.types import *
+from aiogram.types import (
+    Message, CallbackQuery, InlineKeyboardMarkup,
+    InlineKeyboardButton, ChatPermissions, FSInputFile
+)
 from aiogram.filters import CommandStart, Command
-from aiogram.enums import ChatMemberStatus, ChatType
-from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ChatType
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
-from aiogram.fsm.filters import StateFilter
+from aiogram.fsm.storage.memory import MemoryStorage
 
-# =============================
-# ENV (Railway)
-# =============================
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_IDS = list(map(int, os.getenv("ADMIN_IDS", "").split(",")))
+# ================== CONFIG ==================
+BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+ADMIN_IDS = set(map(int, os.getenv("ADMIN_IDS", "123456789").split(",")))
 
-# =============================
-# BOT INIT
-# =============================
+# ================== INIT ==================
 logging.basicConfig(level=logging.INFO)
-bot = Bot(
-    BOT_TOKEN,
-    default=DefaultBotProperties(parse_mode="HTML")
-)
-dp = Dispatcher()
+bot = Bot(BOT_TOKEN, parse_mode="HTML")
+dp = Dispatcher(storage=MemoryStorage())
 
-# =============================
-# DATABASE INIT
-# =============================
-conn = sqlite3.connect("media.db")
-cur = conn.cursor()
+# ================== DATABASE ==================
+db = sqlite3.connect("bot.db")
+c = db.cursor()
 
-cur.execute("DROP TABLE IF EXISTS users")
-cur.execute("""
-CREATE TABLE users (
-    user_id INTEGER PRIMARY KEY,
-    username TEXT,
-    first_name TEXT,
-    joined_at TEXT
-)
-""")
-
-cur.execute("""
+c.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
+c.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, first_seen TEXT)")
+c.execute("""
 CREATE TABLE IF NOT EXISTS media (
-    code TEXT PRIMARY KEY,
-    file_id TEXT,
-    file_type TEXT,
-    created_at TEXT
+ code TEXT PRIMARY KEY,
+ file_id TEXT,
+ type TEXT,
+ caption TEXT,
+ created TEXT
 )
 """)
+db.commit()
 
-cur.execute("""
-CREATE TABLE IF NOT EXISTS settings (
-    key TEXT PRIMARY KEY,
-    value TEXT
-)
-""")
-conn.commit()
+# ================== HELPERS ==================
+def get_setting(key, default=None):
+    r = c.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+    return r[0] if r else default
 
-# =============================
-# DEFAULT SETTINGS
-# =============================
+def set_setting(key, val):
+    c.execute("INSERT OR REPLACE INTO settings VALUES (?,?)", (key, str(val)))
+    db.commit()
 
-def set_default(key, value):
-    cur.execute("INSERT OR IGNORE INTO settings VALUES (?,?)", (key, value))
-    conn.commit()
+def gen_code():
+    import string, random
+    return ''.join(random.choices(string.ascii_letters+string.digits, k=8))
 
-set_default("start_text", "Selamat datang 👋")
-set_default("forbidden_words", "biyo,promosi,bio,biyoh")
-set_default("fsub_links", "")
-set_default("fsub_join_link", "")
+# ================== ADMIN PANEL ==================
+@dp.message(Command("settings"))
+async def settings_panel(msg: Message):
+    if msg.from_user.id not in ADMIN_IDS: return
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📢 Set Channel Post", callback_data="set:post")],
+        [InlineKeyboardButton(text="📦 Set Channel DB", callback_data="set:db")],
+        [InlineKeyboardButton(text="🔒 Set Force Sub", callback_data="set:fsub")],
+        [InlineKeyboardButton(text="✏️ Set Teks Start", callback_data="set:start")],
+        [InlineKeyboardButton(text="📝 Set Exempt Username", callback_data="set:exempt")],
+    ])
+    await msg.answer("⚙️ PANEL ADMIN", reply_markup=kb)
 
-# =============================
-# HELPERS
-# =============================
+class SetState(StatesGroup):
+    waiting = State()
 
-def is_admin(uid: int):
-    return uid in ADMIN_IDS
+@dp.callback_query(F.data.startswith("set:"))
+async def set_menu(cb: CallbackQuery, state: FSMContext):
+    await state.set_state(SetState.waiting)
+    await state.update_data(key=cb.data.split(":")[1])
+    await cb.message.edit_text("Kirim ID / teks sekarang")
 
-async def check_fsub(user_id: int):
-    cur.execute("SELECT value FROM settings WHERE key='fsub_links'")
-    row = cur.fetchone()
-    if not row or not row[0]:
-        return True
-    links = row[0].split("|")
-    for ch in links:
+@dp.message(SetState.waiting)
+async def save_setting(msg: Message, state: FSMContext):
+    data = await state.get_data()
+    set_setting(data['key'], msg.text)
+    await msg.answer("✅ Disimpan")
+    await state.clear()
+
+# ================== START & FORCE JOIN ==================
+async def check_force_join(user_id):
+    # ambil daftar channel/grup wajib join dari DB
+    fsub = get_setting("fsub")
+    if not fsub: return True
+    ids = fsub.split(",")
+    for cid in ids:
         try:
-            member = await bot.get_chat_member(ch, user_id)
-            if member.status not in [ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
+            member = await bot.get_chat_member(int(cid), user_id)
+            if member.status not in ("member","administrator","creator"):
                 return False
-        except:
-            return False
+        except: return False
     return True
 
-# =============================
-# START HANDLER
-# =============================
 @dp.message(CommandStart())
-async def start(message: Message):
-    uid = message.from_user.id
-    cur.execute(
-        "INSERT OR IGNORE INTO users (user_id, username, first_name, joined_at) VALUES (?,?,?,?)",
-        (
-            uid,
-            message.from_user.username,
-            message.from_user.first_name,
-            datetime.now().isoformat()
-        )
-    )
-    conn.commit()
-
-    if not await check_fsub(uid):
-        cur.execute("SELECT value FROM settings WHERE key='fsub_join_link'")
-        join_link = cur.fetchone()[0]
+async def start(msg: Message):
+    c.execute("INSERT OR IGNORE INTO users VALUES (?,?)",
+              (msg.from_user.id, datetime.now().isoformat()))
+    db.commit()
+    if not await check_force_join(msg.from_user.id):
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔗 JOIN SEKARANG", url=join_link)] if join_link else [],
-            [InlineKeyboardButton(text="🔄 COBA LAGI", callback_data="retry_fsub")]
+            [InlineKeyboardButton(text="🔄 COBA LAGI", callback_data="retry")]
         ])
-        return await message.answer("🚫 Kamu belum join semua channel wajib", reply_markup=kb)
+        await msg.answer("❌ Kamu harus join semua channel/grup dulu", reply_markup=kb)
+        return
+    code = msg.text.split(" ",1)[1] if len(msg.text.split())>1 else None
+    if code:
+        r = c.execute("SELECT file_id,type,caption FROM media WHERE code=?",(code,)).fetchone()
+        if r:
+            if r[1]=="photo":
+                await msg.answer_photo(r[0], caption=r[2])
+            elif r[1]=="video":
+                await msg.answer_video(r[0], caption=r[2])
+            elif r[1]=="document":
+                await msg.answer_document(r[0], caption=r[2])
+            else:
+                await msg.answer(r[2] or "")
+            return
+    text = get_setting("start","Selamat datang 👋")
+    await msg.answer(text)
 
-    cur.execute("SELECT value FROM settings WHERE key='start_text'")
-    text = cur.fetchone()[0]
-    await message.answer(text)
-
-# =============================
-# FSUB RETRY
-# =============================
-@dp.callback_query(F.data == "retry_fsub")
-async def retry(call: CallbackQuery):
-    if await check_fsub(call.from_user.id):
-        await call.message.edit_text("✅ Akses dibuka")
+@dp.callback_query(F.data=="retry")
+async def retry(cb: CallbackQuery):
+    if await check_force_join(cb.from_user.id):
+        await cb.message.edit_text("✅ Kamu sudah join, silakan akses konten lagi")
     else:
-        await call.answer("Masih belum join", show_alert=True)
+        await cb.answer("Belum join semua!")
 
-# =============================
-# FILTER KATA + MUTE
-# =============================
-@dp.message(F.chat.type.in_([ChatType.GROUP, ChatType.SUPERGROUP]))
-async def filter_words(message: Message):
-    if message.from_user.id in ADMIN_IDS:
+# ================== FILTER KATA ==================
+BAD_WORDS = ["biyo","biyoh","promosi","bio"]
+
+@dp.message(F.text, F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}))
+async def filter_word(msg: Message):
+    exempt = get_setting("exempt","").split(",")
+    if msg.from_user.id in ADMIN_IDS or (msg.from_user.username and msg.from_user.username in exempt):
         return
-    cur.execute("SELECT value FROM settings WHERE key='forbidden_words'")
-    words = cur.fetchone()[0].split(",")
-    text = (message.text or "").lower()
-    if any(w in text for w in words):
-        try:
-            await message.delete()
-            await bot.restrict_chat_member(
-                message.chat.id,
-                message.from_user.id,
-                permissions=ChatPermissions(can_send_messages=False),
-                until_date=datetime.now() + timedelta(hours=24)
-            )
-        except:
-            pass
+    for w in BAD_WORDS:
+        if w in msg.text.lower():
+            try:
+                await msg.delete()
+                await bot.restrict_chat_member(
+                    msg.chat.id,
+                    msg.from_user.id,
+                    permissions=ChatPermissions(can_send_messages=False),
+                    until_date=datetime.now()+timedelta(hours=24)
+                )
+            except: pass
 
-# =============================
-# SAVE MEDIA (ADMIN)
-# =============================
-@dp.message(F.content_type.in_([
-    ContentType.PHOTO,
-    ContentType.VIDEO,
-    ContentType.DOCUMENT,
-    ContentType.ANIMATION
-]))
-async def save_media(message: Message):
-    if not is_admin(message.from_user.id):
-        return
-    code = uuid.uuid4().hex[:8]
-    file = message.photo[-1].file_id if message.photo else message.video.file_id if message.video else message.document.file_id if message.document else message.animation.file_id
-    ftype = message.content_type
-    cur.execute("INSERT INTO media VALUES (?,?,?,?)", (code, file, ftype, datetime.now().isoformat()))
-    conn.commit()
-    await message.reply(f"✅ Disimpan\nKode: <code>{code}</code>\nLink: t.me/{(await bot.me()).username}?start={code}")
+# ================== MEDIA UPLOAD & AUTO POST ==================
+@dp.message(F.content_type.in_({"photo","video","document","animation"}))
+async def save_media(msg: Message):
+    if msg.from_user.id not in ADMIN_IDS: return
+    code = gen_code()
+    if msg.photo: file_id, mtype = msg.photo[-1].file_id, "photo"
+    elif msg.video: file_id, mtype = msg.video.file_id, "video"
+    elif msg.document: file_id, mtype = msg.document.file_id, "document"
+    elif msg.animation: file_id, mtype = msg.animation.file_id, "animation"
+    else: return
+    c.execute("INSERT INTO media VALUES (?,?,?,?,?)",(code,file_id,mtype,msg.caption or "",datetime.now().isoformat()))
+    db.commit()
+    # backup ke channel DB
+    dbch = get_setting("db")
+    if dbch:
+        await bot.copy_message(int(dbch), msg.chat.id, msg.message_id)
+    # auto post ke channel post
+    postch = get_setting("post")
+    if postch:
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🎬 NONTON", url=f"https://t.me/{(await bot.get_me()).username}?start={code}")]
+        ])
+        await bot.send_message(int(postch), msg.caption or "Konten baru", reply_markup=kb)
 
-# =============================
-# GET MEDIA BY CODE
-# =============================
-@dp.message(Command("start"))
-async def start_code(message: Message):
-    args = message.text.split()
-    if len(args) == 1:
-        return
-    code = args[1]
-    cur.execute("SELECT file_id, file_type FROM media WHERE code=?", (code,))
-    row = cur.fetchone()
-    if not row:
-        return await message.answer("❌ Konten tidak ditemukan")
-    file_id, ftype = row
-    if ftype == ContentType.PHOTO:
-        await message.answer_photo(file_id)
-    elif ftype == ContentType.VIDEO:
-        await message.answer_video(file_id)
-    elif ftype == ContentType.DOCUMENT:
-        await message.answer_document(file_id)
-    else:
-        await message.answer_animation(file_id)
-
-# =============================
-# ADMIN PANEL INLINE
-# =============================
-@dp.message(Command("panel"))
-async def admin_panel(message: Message):
-    if not is_admin(message.from_user.id):
-        return
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📢 FSUB + ADDLINK", callback_data="panel_fsub")],
-        [InlineKeyboardButton(text="✍️ Edit Teks /start", callback_data="panel_start_text")],
-        [InlineKeyboardButton(text="🚫 Kata Terlarang", callback_data="panel_words")]
-    ])
-    await message.answer("⚙️ <b>ADMIN PANEL</b>\nPilih pengaturan:", reply_markup=kb)
-
-# ===== FSUB =====
-@dp.callback_query(F.data == "panel_fsub")
-async def panel_fsub(call: CallbackQuery, state: FSMContext):
-    await state.set_state("await_fsub")
-    await call.message.edit_text("Kirim username / ID channel wajib join (pisahkan dengan |)")
-
-@dp.message(StateFilter("await_fsub"))
-async def set_fsub(message: Message, state: FSMContext):
-    cur.execute("UPDATE settings SET value=? WHERE key='fsub_links'", (message.text,))
-    conn.commit()
-    await state.clear()
-    await message.answer("✅ FSUB berhasil disimpan")
-
-# ===== START TEXT =====
-@dp.callback_query(F.data == "panel_start_text")
-async def panel_start_text(call: CallbackQuery, state: FSMContext):
-    await state.set_state("await_start_text")
-    await call.message.edit_text("Kirim teks baru untuk /start")
-
-@dp.message(StateFilter("await_start_text"))
-async def set_start_text(message: Message, state: FSMContext):
-    cur.execute("UPDATE settings SET value=? WHERE key='start_text'", (message.text,))
-    conn.commit()
-    await state.clear()
-    await message.answer("✅ Teks /start diperbarui")
-
-# ===== FORBIDDEN WORDS =====
-@dp.callback_query(F.data == "panel_words")
-async def panel_words(call: CallbackQuery, state: FSMContext):
-    await state.set_state("await_words")
-    await call.message.edit_text("Kirim daftar kata terlarang (pisahkan koma)")
-
-@dp.message(StateFilter("await_words"))
-async def set_words(message: Message, state: FSMContext):
-    cur.execute("UPDATE settings SET value=? WHERE key='forbidden_words'", (message.text,))
-    conn.commit()
-    await state.clear()
-    await message.answer("✅ Kata terlarang diperbarui")
-
-# =============================
-# STATS
-# =============================
+# ================== STATS & SENDDB ==================
 @dp.message(Command("stats"))
-async def stats(message: Message):
-    if not is_admin(message.from_user.id):
-        return
-    cur.execute("SELECT COUNT(*) FROM users")
-    users = cur.fetchone()[0]
-    cur.execute("SELECT COUNT(*) FROM media")
-    media = cur.fetchone()[0]
-    await message.answer(f"👤 Users: {users}\n🎞 Media: {media}")
+async def stats(msg: Message):
+    if msg.from_user.id not in ADMIN_IDS: return
+    u = c.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    m = c.execute("SELECT COUNT(*) FROM media").fetchone()[0]
+    await msg.answer(f"👤 User: {u}\n📦 Media: {m}")
 
-# =============================
-# SEND DB
-# =============================
 @dp.message(Command("senddb"))
-async def senddb(message: Message):
-    if not is_admin(message.from_user.id):
-        return
-    await message.answer_document(FSInputFile("media.db"))
+async def senddb(msg: Message):
+    if msg.from_user.id not in ADMIN_IDS: return
+    await msg.answer_document(FSInputFile("bot.db"))
 
-# =============================
-# RUN
-# =============================
+# ================== RUN ==================
 async def main():
     await dp.start_polling(bot)
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     asyncio.run(main())
