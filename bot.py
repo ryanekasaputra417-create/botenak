@@ -202,7 +202,7 @@ async def finalize_post(m: Message, state: FSMContext):
             link = f"https://t.me/{BOT_USN}?start={code}"
             kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=s['btn_nonton'], url=link)]])
             await bot.send_photo(s['post_ch_id'], m.photo[-1].file_id, caption=data['title'], reply_markup=kb)
-            await m.answer(f"✅ BERHASIL!\nLink: `{link}`")
+            await m.answer(f"✅ BERHASIL!\nLink: {link}")
         else:
             await m.answer("❌ Gagal post: CH ID Kosong.")
     finally: await state.clear()
@@ -216,3 +216,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
