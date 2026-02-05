@@ -216,8 +216,8 @@ async def process_member_donation(m: Message, state: FSMContext):
     await m.reply("✅ Terima kasih! Kontenmu dikirim ke admin untuk dicek.")
     await state.clear()
 
-# Handler Upload Admin (Langsung Post)
-@dp.message(F.chat.type == "private", F.from_user.id == ADMIN_ID, (F.photo | F.video | F.document))
+# BAGIAN YANG DIPERBAIKI: Menambahkan StateFilter(None) agar tidak bentrok dengan state input judul/cover
+@dp.message(F.chat.type == "private", F.from_user.id == ADMIN_ID, (F.photo | F.video | F.document), StateFilter(None))
 async def admin_upload(m: Message, state: FSMContext):
     fid = m.photo[-1].file_id if m.photo else (m.video.file_id if m.video else m.document.file_id)
     mtype = "photo" if m.photo else "video"
