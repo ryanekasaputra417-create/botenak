@@ -110,37 +110,73 @@ async def adm_exit(c: CallbackQuery, state: FSMContext):
     await c.message.delete()
 
 # ================= AUTO UPLOAD & POST =================
-@dp.message(F.chat.type == "private", (F.photo | F.video | F.document), F.from_user.id == ADMIN_ID)
-async def start_upload(m: Message, state: FSMContext):
-    fid = m.photo[-1].file_id if m.photo else (m.video.file_id if m.video else m.document.file_id)
-    mtype = "photo" if m.photo else "video"
-    await state.update_data(fid=fid, mtype=mtype)
-    await state.set_state(BotState.wait_title)
-    await m.answer("🏷️ Judul konten?", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ BATAL", callback_data="adm_exit")]]))
-
-@dp.message(BotState.wait_title)
-async def get_title(m: Message, state: FSMContext):
-    await state.update_data(title=m.text)
-    await state.set_state(BotState.wait_cover)
-    await m.answer("📸 Kirim Foto Cover:", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ BATAL", callback_data="adm_exit")]]))
-
-@dp.message(BotState.wait_cover, F.photo)
-async def final_post(m: Message, state: FSMContext):
-    data = await state.get_data()
-    s = await get_conf()
-    code = gen_code()
-    if not s['db_ch_id'] or not s['post_ch_id']: return await m.answer("❌ Set ID Channel dulu!")
-    
-    try:
-        bk = await bot.send_photo(s['db_ch_id'], data['fid'], caption=f"ID: `{code}`\nTITLE: {data['title']}")
-        async with aiosqlite.connect("master.db") as db:
-            await db.execute("INSERT INTO media VALUES (?,?,?,?,?)", (code, data['fid'], data['mtype'], data['title'], str(bk.message_id)))
-            await db.commit()
+# ================= AUTO UPLOAD (ADMIN) & DONASI (MEMBER) =================
+@dp.message(F.chat.type == "private", (F.photo | F.video | F.document | F.animation))
+async def handle_incoming_media(m: Message, state: FSMContext):
+    # CEK JIKA YANG KIRIM ADALAH ADMIN
+    if m.from_user.id == ADMIN_ID:
+        current_state = await state.get_state()
         
-        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=s['btn_nonton'], url=f"https://t.me/{BOT_USN}?start={code}")]])
-        await bot.send_photo(s['post_ch_id'], m.photo[-1].file_id, caption=data['title'], reply_markup=kb)
-        await m.answer(f"✅ Berhasil dipost!\nLink: `https://t.me/{BOT_USN}?start={code}`")
-    finally: await state.clear()
+        # Jika Admin sedang di tengah proses upload (Menunggu Cover)
+        if current_state == BotState.wait_cover:
+            if not m.photo:
+                return await m.answer("❌ Mohon kirimkan FOTO untuk cover!")
+            
+            data = await state.get_data()
+            s = await get_conf()
+            code = gen_code()
+            
+            try:
+                # 1. Backup ke Channel DB
+                bk = await bot.send_photo(s['db_ch_id'], data['fid'], caption=f"ID: `{code}`\nTITLE: {data['title']}")
+                
+                # 2. Simpan ke SQLite
+                async with aiosqlite.connect("master.db") as db:
+                    await db.execute("INSERT INTO media VALUES (?,?,?,?,?)", 
+                                   (code, data['fid'], data['mtype'], data['title'], str(bk.message_id)))
+                    await db.commit()
+                
+                # 3. Post ke Channel Utama
+                kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=s['btn_nonton'], url=f"https://t.me/{BOT_USN}?start={code}")]])
+                await bot.send_photo(s['post_ch_id'], m.photo[-1].file_id, caption=data['title'], reply_markup=kb)
+                
+                await m.answer(f"✅ **BERHASIL DIPOST!**\nLink: `https://t.me/{BOT_USN}?start={code}`")
+                await state.clear()
+            except Exception as e:
+                await m.answer(f"❌ Gagal Post! Pastikan ID Channel Benar.\nError: {e}")
+                await state.clear()
+            return
+
+        # Jika Admin baru pertama kali kirim media (Mulai Upload)
+        fid = m.photo[-1].file_id if m.photo else (m.video.file_id if m.video else m.document.file_id)
+        mtype = "photo" if m.photo else "video"
+        
+        await state.update_data(fid=fid, mtype=mtype)
+        await state.set_state(BotState.wait_title) # Set ke nunggu judul
+        return await m.answer("🏷️ **JUDUL:**\nKetik judul untuk konten ini:", 
+                             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ BATAL", callback_data="adm_exit")]]))
+
+    # JIKA YANG KIRIM ADALAH MEMBER (DONASI)
+    else:
+        # Kirim ke Admin
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ APPROVE", callback_data=f"don_app_{m.from_user.id}_{m.message_id}"),
+             InlineKeyboardButton(text="❌ REJECT", callback_data="adm_exit")]
+        ])
+        await bot.forward_message(ADMIN_ID, m.chat.id, m.message_id)
+        await bot.send_message(ADMIN_ID, f"🎁 **DONASI BARU**\nDari: {m.from_user.full_name}\nID: `{m.from_user.id}`", reply_markup=kb)
+        await m.answer("✅ Media donasi kamu sudah terkirim ke admin. Terima kasih!")
+
+# Handler khusus untuk teks Judul agar tidak bentrok
+@dp.message(BotState.wait_title)
+async def process_title(m: Message, state: FSMContext):
+    if not m.text:
+        return await m.answer("❌ Kirimkan teks untuk judul!")
+    
+    await state.update_data(title=m.text)
+    await state.set_state(BotState.wait_cover) # Pindah ke nunggu cover
+    await m.answer("📸 **COVER:**\nSekarang kirimkan **FOTO** untuk cover/postingan di channel:", 
+                   reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ BATAL", callback_data="adm_exit")]]))
 
 # ================= MEMBER LOGIC =================
 @dp.message(CommandStart())
@@ -186,21 +222,6 @@ async def retry_cb(c: CallbackQuery):
     await c.message.delete()
     await start_handler(c.message, code_override=code)
 
-# ================= DONASI & ASK =================
-@dp.callback_query(F.data == "don")
-async def don_btn(c: CallbackQuery): await c.message.answer("🎁 Kirim media donasi kamu langsung ke chat ini.")
-
-@dp.callback_query(F.data == "ask")
-async def ask_btn(c: CallbackQuery, state: FSMContext):
-    await state.set_state(BotState.wait_ask)
-    await c.message.answer("💬 Kirim pertanyaan kamu:", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ BATAL", callback_data="adm_exit")]]))
-
-@dp.message(BotState.wait_ask)
-async def ask_process(m: Message, state: FSMContext):
-    await bot.send_message(ADMIN_ID, f"📩 ASK dari {m.from_user.full_name}: {m.text}")
-    await m.answer("✅ Terkirim!")
-    await state.clear()
-
 # ================= ADMIN CMDS =================
 @dp.message(Command("stats"), F.from_user.id == ADMIN_ID)
 async def stats_cmd(m: Message):
@@ -229,3 +250,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
