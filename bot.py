@@ -339,7 +339,7 @@ async def start_handler(message: Message):
             [InlineKeyboardButton(text="📩 Tanya Admin", callback_data="menu_ask")],
             [InlineKeyboardButton(text="🎁 Donasi Konten", callback_data="menu_donate")]
         ])
-        return await message.answer(f"👋 Halo **{message.from_user.first_name}**!", reply_markup=kb_menu)
+        return await message.answer(f"👋 Halo {message.from_user.first_name}!", reply_markup=kb_menu)
 
     async with aiosqlite.connect(DB_NAME) as db:
         async with db.execute("SELECT file_id, type, caption FROM media WHERE code=?", (code,)) as cur:
@@ -360,3 +360,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
