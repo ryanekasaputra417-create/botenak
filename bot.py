@@ -197,6 +197,63 @@ async def process_broadcast(m: Message, state: FSMContext):
     await m.reply(f"✅ Terkirim ke {count} user.")
     await state.clear()
 
+
+# ================= ADMIN DASHBOARD (DENGAN TOMBOL HAPUS) =================
+@dp.message(Command("settings"), F.from_user.id == ADMIN_ID)
+async def admin_settings(m: Message):
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📝 Start Teks", callback_data="set_start_txt"), InlineKeyboardButton(text="📢 Fsub Teks", callback_data="set_fsub_txt")],
+        [InlineKeyboardButton(text="🔗 Set Addlist/Link", callback_data="set_fsub_link"), InlineKeyboardButton(text="🗑️ HAPUS LINK", callback_data="del_fsub_link")],
+        [InlineKeyboardButton(text="👥 Set USN Fsub", callback_data="set_fsub_list"), InlineKeyboardButton(text="🗑️ HAPUS USN", callback_data="del_fsub_list")],
+        [InlineKeyboardButton(text="📣 Set CH Post", callback_data="set_post_ch_id"), InlineKeyboardButton(text="🗑️ HAPUS CH POST", callback_data="del_post_ch_id")],
+        [InlineKeyboardButton(text="📁 CH Database", callback_data="set_db_ch_id"), InlineKeyboardButton(text="📜 Log Channel", callback_data="set_log_id")],
+        [InlineKeyboardButton(text="🛡️ Exempt", callback_data="set_exempt_usn"), InlineKeyboardButton(text="❌ TUTUP", callback_data="adm_exit")]
+    ])
+    await m.answer("⚙️ **ADMIN PANEL**\nKlik tombol kiri untuk **Ubah**, tombol kanan untuk **Hapus/Kosongkan**.", reply_markup=kb)
+
+# ================= HANDLER HAPUS DATA (RESET KE KOSONG) =================
+@dp.callback_query(F.data.startswith("del_"))
+async def config_delete(c: CallbackQuery):
+    field = c.data.replace("del_", "")
+    
+    async with aiosqlite.connect("master.db") as db:
+        # Kita set nilainya jadi string kosong ('')
+        await db.execute(f"UPDATE settings SET {field}='' WHERE id=1")
+        await db.commit()
+    
+    await c.answer(f"✅ Berhasil menghapus {field}!", show_alert=True)
+    # Refresh menu settings setelah dihapus
+    await admin_settings(c.message) 
+    await c.message.delete()
+    
+# ================= UPDATE DATABASE HANDLER =================
+@dp.message(Command("update"))
+async def update_database(m: Message):
+    # Cek apakah dia OWNER atau Admin
+    if not await is_admin(m.from_user.id): return
+
+    # Cek apakah dia reply sebuah file
+    if not m.reply_to_message or not m.reply_to_message.document:
+        return await m.reply("❌ **Caranya:** Reply file database (.db), lalu ketik `/update`")
+
+    doc = m.reply_to_message.document
+    
+    # Validasi biar nggak asal upload file
+    if not doc.file_name.endswith(".db"):
+        return await m.reply("❌ File harus berakhiran `.db`, su!")
+
+    try:
+        # Proses download dan menimpa file lama
+        file_info = await bot.get_file(doc.file_id)
+        
+        # Sesuai variabel DB_NAME di kodingan lu
+        await bot.download_file(file_info.file_path, DB_NAME)
+        
+        await m.reply("✅ **DATABASE UPDATED!**\nMedia.db berhasil diperbarui. Silakan cek `/panel` atau tes link lama.")
+    except Exception as e:
+        await m.reply(f"❌ Gagal update database: {e}")
+        
+
 # ================= MENU MEMBER (ASK & DONASI) =================
 @dp.callback_query(F.data == "menu_ask")
 async def member_ask_cb(c: CallbackQuery, state: FSMContext):
@@ -360,4 +417,5 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
